@@ -43,9 +43,6 @@ extern security_context_t sBlkidUntrustedContext;
 extern security_context_t sFsckContext;
 extern security_context_t sFsckUntrustedContext;
 
-status_t CreateDeviceNode(const std::string& path, dev_t dev);
-status_t DestroyDeviceNode(const std::string& path);
-
 /* fs_prepare_dir wrapper that creates with SELinux context */
 status_t PrepareDir(const std::string& path, mode_t mode, uid_t uid, gid_t gid);
 
@@ -58,12 +55,8 @@ status_t KillProcessesUsingPath(const std::string& path);
 /* Creates bind mount from source to target */
 status_t BindMount(const std::string& source, const std::string& target);
 
-/* Reads filesystem metadata from device at path */
-status_t ReadMetadata(const std::string& path, std::string& fsType,
-        std::string& fsUuid, std::string& fsLabel);
-
 /* Reads filesystem metadata from untrusted device at path */
-status_t ReadMetadataUntrusted(const std::string& path, std::string& fsType,
+status_t ReadPartMetadata(const std::string& path, std::string& fsType,
         std::string& fsUuid, std::string& fsLabel);
 
 /* Returns either WEXITSTATUS() status, or a negative errno */

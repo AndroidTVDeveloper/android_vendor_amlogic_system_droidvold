@@ -1,7 +1,4 @@
-service droidvold /vendor/bin/droidvold \
-        --blkid_context=u:r:blkid:s0 --blkid_untrusted_context=u:r:blkid_untrusted:s0 \
-        --fsck_context=u:r:fsck:s0 --fsck_untrusted_context=u:r:fsck_untrusted:s0
+service droidvold /vendor/bin/droidvold
     class core
-    socket droidvold stream 0660 root system
     ioprio be 2
     writepid /dev/cpuset/foreground/tasks

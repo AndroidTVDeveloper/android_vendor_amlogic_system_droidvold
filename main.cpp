@@ -16,15 +16,21 @@
 
 #include "Disk.h"
 #include "VolumeManager.h"
-#include "CommandListener.h"
 #include "NetlinkManager.h"
-#include "sehandle.h"
+#include "DroidVold.h"
+
+#define LOG_TAG "droidVold"
 
 #include <android-base/logging.h>
 #include <android-base/stringprintf.h>
 #include <cutils/klog.h>
 #include <cutils/properties.h>
 #include <cutils/sockets.h>
+
+#include <binder/IPCThreadState.h>
+#include <binder/ProcessState.h>
+#include <binder/IServiceManager.h>
+#include <HidlTransportSupport.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,23 +43,23 @@
 #include <dirent.h>
 #include <fs_mgr.h>
 
-#define LOG_TAG "droidVold"
-
 #include "cutils/klog.h"
 #include "cutils/log.h"
 #include "cutils/properties.h"
 
 static int process_config(VolumeManager *vm, bool* has_adoptable);
 
-static void coldboot(const char *path);
-static void parse_args(int argc, char** argv);
 static void set_media_poll_time(void);
 
 struct fstab *fstab;
 
-struct selabel_handle *sehandle;
-
-using android::base::StringPrintf;
+using namespace android;
+using ::android::base::StringPrintf;
+using ::android::hardware::configureRpcThreadpool;
+using ::android::hardware::joinRpcThreadpool;
+using ::vendor::amlogic::hardware::droidvold::V1_0::implementation::DroidVold;
+using ::vendor::amlogic::hardware::droidvold::V1_0::IDroidVold;
+using ::vendor::amlogic::hardware::droidvold::V1_0::Result;
 
 int main(int argc, char** argv) {
     setenv("ANDROID_LOG_TAGS", "*:v", 1);
@@ -61,18 +67,12 @@ int main(int argc, char** argv) {
 
     LOG(INFO) << "doildVold 1.0 firing up";
 
+    android::ProcessState::initWithDriver("/dev/hwbinder");
+    configureRpcThreadpool(4, true);
+
     VolumeManager *vm;
     NetlinkManager *nm;
-    CommandListener *cl;
-
-    parse_args(argc, argv);
-
-    sehandle = selinux_android_file_context_handle();
-    if (sehandle) {
-        selinux_android_set_sehandle(sehandle);
-    }
-
-    mkdir("/dev/block/droidvold", 0755);
+    DroidVold *dv;
 
     /* Create our singleton managers */
     if (!(vm = VolumeManager::Instance())) {
@@ -89,9 +89,13 @@ int main(int argc, char** argv) {
         vm->setDebug(true);
     }
 
-    cl = new CommandListener();
-    vm->setBroadcaster((SocketListener *) cl);
-    nm->setBroadcaster((SocketListener *) cl);
+    if (!(dv= DroidVold::Instance())) {
+        LOG(ERROR) << "Unable to create DroidVold";
+        exit(1);
+    }
+
+    vm->setBroadcaster(dv);
+    nm->setBroadcaster(dv);
 
     if (vm->start()) {
         PLOG(ERROR) << "Unable to start VolumeManager";
@@ -109,21 +113,21 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
+    sp<IDroidVold> idv = DroidVold::Instance();
+    if (idv == nullptr)
+        ALOGE("Cannot create IDroidVold service");
+    else if (idv->registerAsService() != OK)
+        ALOGE("Cannot register IDroidVold service.");
+    else
+        ALOGI("IDroidVold service created.");
+
     set_media_poll_time();
-    coldboot("/sys/block");
+    vm->coldboot("/sys/block");
 
     /*
-     * Now that we're up, we can respond to commands
+     * This thread is just going to process Binder transactions.
      */
-    if (cl->startListener()) {
-        PLOG(ERROR) << "Unable to start CommandListener";
-        exit(1);
-    }
-
-    // Eventually we'll become the monitoring thread
-    while (1) {
-        sleep(1000);
-    }
+    joinRpcThreadpool();
 
     LOG(ERROR) << "droidVold exiting";
     exit(0);
@@ -138,74 +142,6 @@ static void set_media_poll_time(void) {
         close (fd);
     } else {
         LOG(ERROR) << "kernel not support media poll uevent!";
-    }
-}
-
-static void parse_args(int argc, char** argv) {
-    static struct option opts[] = {
-        {"blkid_context", required_argument, 0, 'b' },
-        {"blkid_untrusted_context", required_argument, 0, 'B' },
-        {"fsck_context", required_argument, 0, 'f' },
-        {"fsck_untrusted_context", required_argument, 0, 'F' },
-    };
-
-    int c;
-    while ((c = getopt_long(argc, argv, "", opts, nullptr)) != -1) {
-        switch (c) {
-        case 'b': android::droidvold::sBlkidContext = optarg; break;
-        case 'B': android::droidvold::sBlkidUntrustedContext = optarg; break;
-        case 'f': android::droidvold::sFsckContext = optarg; break;
-        case 'F': android::droidvold::sFsckUntrustedContext = optarg; break;
-        }
-    }
-
-    CHECK(android::droidvold::sBlkidContext != nullptr);
-    CHECK(android::droidvold::sBlkidUntrustedContext != nullptr);
-    CHECK(android::droidvold::sFsckContext != nullptr);
-    CHECK(android::droidvold::sFsckUntrustedContext != nullptr);
-}
-
-static void do_coldboot(DIR *d, int lvl) {
-    struct dirent *de;
-    int dfd, fd;
-
-    dfd = dirfd(d);
-
-    fd = openat(dfd, "uevent", O_WRONLY | O_CLOEXEC);
-    if (fd >= 0) {
-        write(fd, "add\n", 4);
-        close(fd);
-    }
-
-    while ((de = readdir(d))) {
-        DIR *d2;
-
-        if (de->d_name[0] == '.')
-            continue;
-
-        if (de->d_type != DT_DIR && lvl > 0)
-            continue;
-
-        fd = openat(dfd, de->d_name, O_RDONLY | O_DIRECTORY);
-        if (fd < 0)
-            continue;
-
-        d2 = fdopendir(fd);
-        if (d2 == 0)
-            close(fd);
-        else {
-            do_coldboot(d2, lvl + 1);
-            closedir(d2);
-        }
-    }
-}
-
-static void coldboot(const char *path) {
-    DIR *d = opendir(path);
-
-    if (d) {
-        do_coldboot(d, 0);
-        closedir(d);
     }
 }
 

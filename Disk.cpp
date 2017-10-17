@@ -105,21 +105,20 @@ static bool isVirtioBlkDevice(unsigned int major) {
 }
 
 Disk::Disk(const std::string& eventPath, dev_t device,
-        const std::string& nickname, int flags) :
+        const std::string& nickname, const std::string& eventName, int flags):
         mDevice(device), mSize(-1), mNickname(nickname), mFlags(flags), mCreated(
                 false), mJustPartitioned(false) {
     mId = StringPrintf("disk:%u,%u", major(device), minor(device));
     mEventPath = eventPath;
+    mDevName = eventName;
     mSysPath = StringPrintf("/sys/%s", eventPath.c_str());
-    mDevPath = StringPrintf("/dev/block/droidvold/%s", mId.c_str());
+    mDevPath = StringPrintf("/dev/block/%s", mDevName.c_str());
 
     mSrdisk = (!strncmp(nickname.c_str(), "sr", 2)) ? true : false;
-    CreateDeviceNode(mDevPath, mDevice);
 }
 
 Disk::~Disk() {
     CHECK(!mCreated);
-    DestroyDeviceNode(mDevPath);
 }
 
 std::shared_ptr<VolumeBase> Disk::findVolume(const std::string& id) {
@@ -148,11 +147,56 @@ status_t Disk::create() {
     CHECK(!mCreated);
     mCreated = true;
     notifyEvent(ResponseCode::DiskCreated, StringPrintf("%d", mFlags));
+
     // do nothing when srdisk is created
-    if (!mSrdisk) {
-        readMetadata();
-        readPartitions();
+    if (mSrdisk)
+        return OK;
+
+    readDiskMetadata();
+    // sleep 10ms
+    usleep(10000);
+
+    std::string fsType;
+    std::string unused;
+
+    // if no partition, handle here
+    if (ReadPartMetadata(mDevPath, fsType, unused, unused) == OK) {
+        if (!fsType.empty()) {
+            if (VolumeManager::Instance()->getDebug())
+                LOG(DEBUG) << "treat entire disk as partition, devPath=" << mDevPath;
+            createPublicVolume(mDevName, true, 0);
+        }
     }
+
+    return OK;
+}
+
+status_t Disk::reset() {
+    CHECK(!mCreated);
+    mCreated = true;
+    notifyEvent(ResponseCode::DiskCreated, StringPrintf("%d", mFlags));
+
+    // do nothing when srdisk is created
+    if (mSrdisk)
+        return OK;
+
+    readDiskMetadata();
+
+    if (mPartNo.size() == 0) {
+        createPublicVolume(mDevName, true, 0);
+    } else {
+        std::string partDevName;
+        for (auto part : mPartNo) {
+            if (mFlags & Flags::kUsb)
+                partDevName = StringPrintf("%s%d", mDevName.c_str(), part);
+            else if (mFlags & Flags::kSd)
+                partDevName = StringPrintf("%sp%d", mDevName.c_str(), part);
+
+            createPublicVolume(partDevName, false, part);
+        }
+    }
+
+
     return OK;
 }
 
@@ -166,7 +210,7 @@ status_t Disk::destroy() {
 
 void Disk::handleJustPublicPhysicalDevice(
     const std::string& physicalDevName) {
-    auto vol = std::shared_ptr<VolumeBase>(new PublicVolume(physicalDevName));
+    auto vol = std::shared_ptr<VolumeBase>(new PublicVolume(physicalDevName, true));
     if (mJustPartitioned) {
         LOG(DEBUG) << "Device just partitioned; silently formatting";
         vol->setSilent(true);
@@ -183,8 +227,9 @@ void Disk::handleJustPublicPhysicalDevice(
     //vol->mount();
 }
 
-void Disk::createPublicVolume(dev_t device) {
-    auto vol = std::shared_ptr<VolumeBase>(new PublicVolume(device));
+void Disk::createPublicVolume(const std::string& partDevName,
+        const bool isPhysical, int part) {
+    auto vol = std::shared_ptr<VolumeBase>(new PublicVolume(partDevName, isPhysical));
     if (mJustPartitioned) {
         LOG(DEBUG) << "Device just partitioned; silently formatting";
         vol->setSilent(true);
@@ -197,6 +242,9 @@ void Disk::createPublicVolume(dev_t device) {
     mVolumes.push_back(vol);
     vol->setDiskId(getId());
     vol->setSysPath(getSysPath());
+    vol->setDiskFlags(mFlags);
+    vol->setPartNo(part);
+
     vol->create();
     //vol->mount();
 }
@@ -208,7 +256,7 @@ void Disk::destroyAllVolumes() {
     mVolumes.clear();
 }
 
-status_t Disk::readMetadata() {
+status_t Disk::readDiskMetadata() {
     mSize = -1;
     mLabel.clear();
 
@@ -273,11 +321,60 @@ status_t Disk::readMetadata() {
     return OK;
 }
 
+void Disk::handleBlockEvent(NetlinkEvent *evt) {
+    std::string eventPath(evt->findParam("DEVPATH")?evt->findParam("DEVPATH"):"");
+    std::string devName(evt->findParam("DEVNAME")?evt->findParam("DEVNAME"):"");
+    std::string devType(evt->findParam("DEVTYPE")?evt->findParam("DEVTYPE"):"");
+
+    // can we handle this event
+    if (eventPath.find(mEventPath) == std::string::npos) {
+        LOG(DEBUG) << "evt will handle by other disk " << mEventPath;
+        return;
+    }
+
+    if (devType != "partition") {
+        LOG(DEBUG) << "evt type is not partition " << devType;
+        evt->dump();
+        return;
+    }
+
+    std::string partDevName;
+    switch (evt->getAction()) {
+    case NetlinkEvent::Action::kAdd: {
+        int part = atoi(evt->findParam("PARTN"));
+
+        mPartNo.push_back(part);
+        if (mFlags & Flags::kUsb)
+            partDevName = StringPrintf("%s%d", mDevName.c_str(), part);
+        else if (mFlags & Flags::kSd)
+            partDevName = StringPrintf("%sp%d", mDevName.c_str(), part);
+
+        LOG(INFO) << " partDevName =" << partDevName;
+        createPublicVolume(partDevName, false, part);
+        break;
+    }
+    case NetlinkEvent::Action::kChange: {
+        // ignore
+        LOG(DEBUG) << "Disk at " << mDevPath << " changed";
+        break;
+    }
+    case NetlinkEvent::Action::kRemove: {
+        // will handle by vm
+        break;
+    }
+    default: {
+        LOG(WARNING) << "Unexpected block event action " << (int) evt->getAction();
+        break;
+    }
+    }
+}
+
+#if 0
 status_t Disk::readPartitions() {
     if (mSrdisk) {
         // srdisk has no partiton concept.
         LOG(INFO) << "srdisk try entire disk as fake partition";
-        createPublicVolume(mDevice);
+        //createPublicVolume(mDevice);
         return OK;
     }
 
@@ -306,7 +403,7 @@ status_t Disk::readPartitions() {
 
     Table table = Table::kUnknown;
     bool foundParts = false;
-    std::string physicalDevName;
+    std::string physicalDevName, partDevName;
     for (auto line : output) {
         char* cline = (char*) line.c_str();
         char* token = strtok(cline, kSgdiskToken);
@@ -329,6 +426,12 @@ status_t Disk::readPartitions() {
             }
             dev_t partDevice = makedev(major(mDevice), minor(mDevice) + i);
 
+            if (mFlags & Flags::kUsb)
+                partDevName = StringPrintf("%s%d", mDevName.c_str(), i);
+            else if (mFlags & Flags::kSd)
+                partDevName = StringPrintf("%sp%d", mDevName.c_str(), i);
+            LOG(INFO) << " partDevName =" << partDevName;
+
             if (table == Table::kMbr) {
                 const char* type = strtok(nullptr, kSgdiskToken);
 
@@ -349,14 +452,14 @@ status_t Disk::readPartitions() {
                 case 0x0e: // W95 FAT16 (LBA)
 
                 case 0x07: // NTFS & EXFAT
-                    createPublicVolume(partDevice);
+                    createPublicVolume(partDevName, false);
                     break;
 
                 default:
                     // We should still create public volume here
                     // cause some disk table types are not matched above
                     // but can be mounted successfully
-                    createPublicVolume(partDevice);
+                    createPublicVolume(partDevName, false);
                     LOG(WARNING) << "unsupported table kMbr type " << type;
                     break;
                 }
@@ -365,7 +468,7 @@ status_t Disk::readPartitions() {
                 const char* partGuid = strtok(nullptr, kSgdiskToken);
 
                 if (!strcasecmp(typeGuid, kGptBasicData)) {
-                    createPublicVolume(partDevice);
+                    createPublicVolume(partDevName, false);
                 }
             }
         }
@@ -377,11 +480,11 @@ status_t Disk::readPartitions() {
 
         std::string fsType;
         std::string unused;
-        if (ReadMetadataUntrusted(mDevPath, fsType, unused, unused) == OK) {
+        if (ReadPartMetadata(mDevPath, fsType, unused, unused) == OK) {
             if (IsJustPhysicalDevice(mSysPath, physicalDevName)) {
                 handleJustPublicPhysicalDevice(physicalDevName);
             } else {
-                createPublicVolume(mDevice);
+                createPublicVolume(partDevName, false);
             }
         } else {
             LOG(WARNING) << mId << " failed to identify, giving up";
@@ -392,6 +495,7 @@ status_t Disk::readPartitions() {
     mJustPartitioned = false;
     return OK;
 }
+#endif
 
 status_t Disk::unmountAll() {
     for (auto vol : mVolumes) {
@@ -402,12 +506,12 @@ status_t Disk::unmountAll() {
 
 void Disk::notifyEvent(int event) {
     VolumeManager::Instance()->getBroadcaster()->sendBroadcast(event,
-            getId().c_str(), false);
+            getId());
 }
 
 void Disk::notifyEvent(int event, const std::string& value) {
     VolumeManager::Instance()->getBroadcaster()->sendBroadcast(event,
-            StringPrintf("%s %s", getId().c_str(), value.c_str()).c_str(), false);
+            StringPrintf("%s %s", getId().c_str(), value.c_str()));
 }
 
 

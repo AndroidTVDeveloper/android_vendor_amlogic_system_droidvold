@@ -35,7 +35,7 @@ namespace droidvold {
 
 VolumeBase::VolumeBase(Type type) :
         mType(type), mMountFlags(0), mMountUserId(-1), mCreated(false), mState(
-                State::kUnmounted), mSilent(false) {
+                State::kUnmounted), mSilent(false), mDiskFlags(0), mPartNo(0) {
 }
 
 VolumeBase::~VolumeBase() {
@@ -74,6 +74,26 @@ status_t VolumeBase::setMountFlags(int mountFlags) {
     }
 
     mMountFlags = mountFlags;
+    return OK;
+}
+
+status_t VolumeBase::setDiskFlags(int diskFlags) {
+    if (mCreated) {
+        LOG(WARNING) << getId() << " Diskflags change requires destroyed";
+        return -EBUSY;
+    }
+
+    mDiskFlags = diskFlags;
+    return OK;
+}
+
+status_t VolumeBase::setPartNo(int part) {
+    if (mCreated) {
+        LOG(WARNING) << getId() << " partNo change requires destroyed";
+        return -EBUSY;
+    }
+
+    mPartNo = part;
     return OK;
 }
 
@@ -132,13 +152,13 @@ status_t VolumeBase::setInternalPath(const std::string& internalPath) {
 void VolumeBase::notifyEvent(int event) {
     if (mSilent) return;
     VolumeManager::Instance()->getBroadcaster()->sendBroadcast(event,
-            getId().c_str(), false);
+            getId());
 }
 
 void VolumeBase::notifyEvent(int event, const std::string& value) {
     if (mSilent) return;
     VolumeManager::Instance()->getBroadcaster()->sendBroadcast(event,
-            StringPrintf("%s %s", getId().c_str(), value.c_str()).c_str(), false);
+            StringPrintf("%s %s", getId().c_str(), value.c_str()));
 }
 
 

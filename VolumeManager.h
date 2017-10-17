@@ -34,6 +34,10 @@
 
 #include "Disk.h"
 #include "VolumeBase.h"
+#include "DroidVold.h"
+
+using namespace android;
+using ::vendor::amlogic::hardware::droidvold::V1_0::implementation::DroidVold;
 
 class VolumeManager {
 public:
@@ -44,7 +48,7 @@ public:
 private:
     static VolumeManager *sInstance;
 
-    SocketListener        *mBroadcaster;
+    DroidVold        *mBroadcaster;
 
     bool                   mDebug;
 
@@ -99,13 +103,15 @@ public:
 #endif
 
     int setDebug(bool enable);
+    bool getDebug() { return mDebug; }
 
-    void setBroadcaster(SocketListener *sl) { mBroadcaster = sl; }
-    SocketListener *getBroadcaster() { return mBroadcaster; }
+    void setBroadcaster(DroidVold *sl) { mBroadcaster = sl; }
+    DroidVold *getBroadcaster() { return mBroadcaster; }
 
     static VolumeManager *Instance();
     bool isMountpointMounted(const char *mp);
     int mkdirs(char* path);
+    void coldboot(const char *path);
 
 private:
     VolumeManager();
