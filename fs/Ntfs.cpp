@@ -45,9 +45,9 @@
 #define UNUSED __attribute__((unused))
 
 #ifdef HAS_NTFS_3G
-static char NTFS_3G_PATH[] = "/system/bin/ntfs-3g";
-static char NTFSFIX_3G_PATH[] = "/system/bin/ntfsfix";
-static char MKNTFS_3G_PATH[] = "/system/bin/mkntfs";
+static char NTFS_3G_PATH[] = "/vendor/bin/ntfs-3g";
+static char NTFSFIX_3G_PATH[] = "/vendor/bin/ntfsfix";
+static char MKNTFS_3G_PATH[] = "/vendor/bin/mkntfs";
 #endif /* HAS_NTFS_3G */
 
 extern "C" int mount(

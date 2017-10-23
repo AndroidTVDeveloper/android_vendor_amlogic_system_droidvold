@@ -49,6 +49,7 @@ LOCAL_INIT_RC := droidvold.rc
 
 LOCAL_C_INCLUDES := $(common_c_includes)
 LOCAL_CFLAGS := $(vold_cflags)
+LOCAL_CFLAGS += -DHAS_NTFS_3G
 LOCAL_CONLYFLAGS := $(vold_conlyflags)
 
 LOCAL_SHARED_LIBRARIES := $(common_shared_libraries)
