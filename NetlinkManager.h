@@ -19,6 +19,10 @@
 
 #include <sysutils/SocketListener.h>
 #include <sysutils/NetlinkListener.h>
+#include "DroidVold.h"
+
+using namespace android;
+using ::vendor::amlogic::hardware::droidvold::V1_0::implementation::DroidVold;
 
 class NetlinkHandler;
 
@@ -27,7 +31,7 @@ private:
     static NetlinkManager *sInstance;
 
 private:
-    SocketListener       *mBroadcaster;
+    DroidVold       *mBroadcaster;
     NetlinkHandler       *mHandler;
     int                  mSock;
 
@@ -37,8 +41,8 @@ public:
     int start();
     int stop();
 
-    void setBroadcaster(SocketListener *sl) { mBroadcaster = sl; }
-    SocketListener *getBroadcaster() { return mBroadcaster; }
+    void setBroadcaster(DroidVold *sl) { mBroadcaster = sl; }
+    DroidVold *getBroadcaster() { return mBroadcaster; }
 
     static NetlinkManager *Instance();
 

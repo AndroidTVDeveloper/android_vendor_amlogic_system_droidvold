@@ -39,8 +39,7 @@ namespace droidvold {
  */
 class PublicVolume : public VolumeBase {
 public:
-    explicit PublicVolume(dev_t device);
-    explicit PublicVolume(const std::string& physicalDevName);
+    explicit PublicVolume(const std::string& physicalDevName, const bool isPhysical);
     virtual ~PublicVolume();
 
 protected:

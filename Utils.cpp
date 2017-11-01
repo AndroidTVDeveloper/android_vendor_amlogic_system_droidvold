@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "sehandle.h"
 #include "Utils.h"
 #include "Process.h"
 
@@ -32,10 +31,18 @@
 #include <linux/fs.h>
 #include <stdlib.h>
 #include <sys/mount.h>
-#include <sys/types.h>
+//#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/statvfs.h>
+
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+
+
+#include "ext2fs/ext2fs.h"
+#include "blkid/blkid.h"
 
 #ifndef UMOUNT_NOFOLLOW
 #define UMOUNT_NOFOLLOW    0x00000008  /* Don't follow symlink on umount */
@@ -47,74 +54,16 @@ using android::base::StringPrintf;
 namespace android {
 namespace droidvold {
 
-security_context_t sBlkidContext = nullptr;
 security_context_t sBlkidUntrustedContext = nullptr;
-security_context_t sFsckContext = nullptr;
-security_context_t sFsckUntrustedContext = nullptr;
 
 static const char* kBlkidPath = "/system/bin/blkid";
 static const char* kKeyPath = "/data/misc/vold";
 
 static const char* kProcFilesystems = "/proc/filesystems";
 
-status_t CreateDeviceNode(const std::string& path, dev_t dev) {
-    const char* cpath = path.c_str();
-    status_t res = 0;
-
-    char* secontext = nullptr;
-    if (sehandle) {
-        if (!selabel_lookup(sehandle, &secontext, cpath, S_IFBLK)) {
-            setfscreatecon(secontext);
-        }
-    }
-
-    if (access(cpath, F_OK) == 0) {
-        LOG(DEBUG) << "path: " << path << " already exist";
-        return res;
-    }
-
-    mode_t mode = 0660 | S_IFBLK;
-    if (mknod(cpath, mode, dev) < 0) {
-        if (errno != EEXIST) {
-            PLOG(ERROR) << "Failed to create device node for " << major(dev)
-                    << ":" << minor(dev) << " at " << path;
-            res = -errno;
-        }
-    }
-
-    if (secontext) {
-        setfscreatecon(nullptr);
-        freecon(secontext);
-    }
-
-    return res;
-}
-
-status_t DestroyDeviceNode(const std::string& path) {
-    const char* cpath = path.c_str();
-    if (TEMP_FAILURE_RETRY(unlink(cpath))) {
-        return -errno;
-    } else {
-        return OK;
-    }
-}
-
 status_t PrepareDir(const std::string& path, mode_t mode, uid_t uid, gid_t gid) {
     const char* cpath = path.c_str();
-
-    char* secontext = nullptr;
-    if (sehandle) {
-        if (!selabel_lookup(sehandle, &secontext, cpath, S_IFDIR)) {
-            setfscreatecon(secontext);
-        }
-    }
-
     int res = fs_prepare_dir(cpath, mode, uid, gid);
-
-    if (secontext) {
-        setfscreatecon(nullptr);
-        freecon(secontext);
-    }
 
     if (res == 0) {
         return OK;
@@ -187,63 +136,40 @@ status_t BindMount(const std::string& source, const std::string& target) {
     return OK;
 }
 
-static status_t readMetadata(const std::string& path, std::string& fsType,
-        std::string& fsUuid, std::string& fsLabel, bool untrusted) {
-    fsType.clear();
-    fsUuid.clear();
-    fsLabel.clear();
+status_t ReadPartMetadata(const std::string& path, std::string& fsType,
+        std::string& fsUuid, std::string& fsLabel) {
+    blkid_cache cache = NULL;
+    const char *devices = path.c_str();
 
-    std::vector<std::string> cmd;
-    cmd.push_back(kBlkidPath);
-    cmd.push_back("-c");
-    cmd.push_back("/dev/null");
-    cmd.push_back("-s");
-    cmd.push_back("TYPE");
-    cmd.push_back("-s");
-    cmd.push_back("UUID");
-    cmd.push_back("-s");
-    cmd.push_back("LABEL");
-    cmd.push_back(path);
-
-    std::vector<std::string> output;
-    status_t res = ForkExecvp(cmd, output, untrusted ? sBlkidUntrustedContext : sBlkidContext);
-    if (res != OK) {
-        LOG(WARNING) << "blkid failed to identify " << path;
-        return res;
+    if (blkid_get_cache(&cache, "/dev/null") < 0) {
+        PLOG(ERROR) << "blkid get cache failed path=" << path;
+        blkid_put_cache(cache);
+        return  -errno;
     }
 
-    char value[128];
-    for (auto line : output) {
-        // Extract values from blkid output, if defined
-        const char* cline = line.c_str();
-        const char* start = strstr(cline, "TYPE=");
-        if (start != nullptr && sscanf(start + 5, "\"%127[^\"]\"", value) == 1) {
-            fsType = value;
-        }
+    blkid_dev dev = blkid_get_dev(cache, devices, BLKID_DEV_NORMAL);
+    if (dev) {
+        blkid_tag_iterate iter;
+        const char *type, *value;
 
-        start = strstr(cline, "UUID=");
-        if (start != nullptr && sscanf(start + 5, "\"%127[^\"]\"", value) == 1) {
-            fsUuid = value;
-        }
+        iter = blkid_tag_iterate_begin(dev);
+        while (blkid_tag_next(iter, &type, &value) == 0) {
+            LOG(DEBUG) << "type=" << type << " value=" << value;
 
-        start = strstr(cline, "LABEL=");
-        if (start != nullptr && sscanf(start + 6, "\"%127[^\"]\"", value) == 1) {
-            fsLabel = value;
+            if (!strcmp(type, "TYPE")) {
+                fsType = StringPrintf("%s", value);
+            } else if (!strcmp(type, "UUID")) {
+                fsUuid = StringPrintf("%s", value);
+            } else if (!strcmp(type, "LABEL")) {
+                fsLabel = StringPrintf("%s", value);
+            }
         }
+        blkid_tag_iterate_end(iter);
     }
 
     return OK;
 }
 
-status_t ReadMetadata(const std::string& path, std::string& fsType,
-        std::string& fsUuid, std::string& fsLabel) {
-    return readMetadata(path, fsType, fsUuid, fsLabel, false);
-}
-
-status_t ReadMetadataUntrusted(const std::string& path, std::string& fsType,
-        std::string& fsUuid, std::string& fsLabel) {
-    return readMetadata(path, fsType, fsUuid, fsLabel, true);
-}
 
 status_t ForkExecvp(const std::vector<std::string>& args) {
     return ForkExecvp(args, nullptr);

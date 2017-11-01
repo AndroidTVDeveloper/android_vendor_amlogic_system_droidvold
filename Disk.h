@@ -21,6 +21,7 @@
 #include "VolumeBase.h"
 
 #include <utils/Errors.h>
+#include <sysutils/NetlinkEvent.h>
 
 #include <vector>
 
@@ -37,7 +38,8 @@ class VolumeBase;
  */
 class Disk {
 public:
-    Disk(const std::string& eventPath, dev_t device, const std::string& nickname, int flags);
+    Disk(const std::string& eventPath, dev_t device, const std::string& nickname,
+            const std::string& eventName, int flags);
     virtual ~Disk();
 
     enum Flags {
@@ -70,7 +72,7 @@ public:
     status_t create();
     status_t destroy();
 
-    status_t readMetadata();
+    status_t readDiskMetadata();
     status_t readPartitions();
 
     status_t unmountAll();
@@ -79,6 +81,9 @@ public:
     void notifyEvent(int msg);
     void notifyEvent(int msg, const std::string& value);
     void destroyAllVolumes();
+
+    void handleBlockEvent(NetlinkEvent *evt);
+    status_t reset();
 
 private:
     /* ID that uniquely references this disk */
@@ -89,6 +94,8 @@ private:
     std::string mSysPath;
     /* Device path under dev */
     std::string mDevPath;
+
+    std::string mDevName;
     /* Kernel device representing disk */
     dev_t mDevice;
     /* Size of disk, in bytes */
@@ -108,7 +115,10 @@ private:
     /* Flag indicating is srdisk or not */
     bool mSrdisk;
 
-    void createPublicVolume(dev_t device);
+    std::vector<int> mPartNo;
+
+    void createPublicVolume(const std::string& partDevName,
+            const bool isPhysical, int part);
     void createPrivateVolume(dev_t device, const std::string& partGuid);
     void handleJustPublicPhysicalDevice(const std::string& physicalDevName);
     void getPhysicalDev(dev_t &device, const std:: string& sysPath, int part);

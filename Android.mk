@@ -2,8 +2,7 @@ LOCAL_PATH:= $(call my-dir)
 
 common_src_files := \
 	VolumeManager.cpp \
-	CommandListener.cpp \
-	VoldCommand.cpp \
+	DroidVold.cpp \
 	NetlinkManager.cpp \
 	NetlinkHandler.cpp \
 	Process.cpp \
@@ -17,10 +16,16 @@ common_src_files := \
 	VolumeBase.cpp \
 	PublicVolume.cpp \
 	ResponseCode.cpp \
-	Utils.cpp \
-	secontext.cpp \
+	Utils.cpp
+
+common_c_includes := \
+	system/libhidl/transport/include/hidl \
+	external/libcxx/include
 
 common_shared_libraries := \
+	vendor.amlogic.hardware.droidvold@1.0_vendor \
+	libhidlbase \
+	libhidltransport \
 	libsysutils \
 	libcutils \
 	liblog \
@@ -28,13 +33,19 @@ common_shared_libraries := \
 	libext4_utils \
 	libselinux \
 	libutils \
-	libbase
+	libbinder \
+	libbase \
+	libext2_blkid \
+	libext2fs \
+	libext2_com_err \
+	libext2_e2p
+
 
 common_static_libraries := \
 	libfs_mgr \
 
 vold_conlyflags := -std=c11
-vold_cflags := -Werror -Wall -Wno-missing-field-initializers -Wno-unused-variable -Wno-unused-parameter
+vold_cflags := -W -Wall -Wno-missing-field-initializers -Wno-unused-variable -Wno-unused-parameter
 
 include $(CLEAR_VARS)
 
@@ -54,20 +65,7 @@ LOCAL_CONLYFLAGS := $(vold_conlyflags)
 
 LOCAL_SHARED_LIBRARIES := $(common_shared_libraries)
 LOCAL_STATIC_LIBRARIES := $(common_static_libraries)
-LOCAL_REQUIRED_MODULES := $(required_modules)
-LOCAL_PROPRIETARY_MODULE := true
 
-include $(BUILD_EXECUTABLE)
-
-include $(CLEAR_VARS)
-
-LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
-LOCAL_CLANG := true
-LOCAL_SRC_FILES := dvdc.cpp
-LOCAL_MODULE := dvdc
-LOCAL_SHARED_LIBRARIES := libcutils libbase
-LOCAL_CFLAGS := $(vold_cflags)
-LOCAL_CONLYFLAGS := $(vold_conlyflags)
 LOCAL_PROPRIETARY_MODULE := true
 
 include $(BUILD_EXECUTABLE)

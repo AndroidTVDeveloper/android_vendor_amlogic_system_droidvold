@@ -44,6 +44,8 @@
 
 #include "VolumeManager.h"
 #include "NetlinkManager.h"
+#include "DroidVold.h"
+
 #include "fs/Ext4.h"
 #include "fs/Vfat.h"
 #include "Utils.h"
@@ -106,74 +108,83 @@ void VolumeManager::handleBlockEvent(NetlinkEvent *evt) {
         evt->dump();
     }
 
-    std::string eventPath(evt->findParam("DEVPATH")?evt->findParam("DEVPATH"):"");
     std::string devType(evt->findParam("DEVTYPE")?evt->findParam("DEVTYPE"):"");
 
-    if (devType != "disk") return;
 
-    int major = atoi(evt->findParam("MAJOR"));
-    int minor = atoi(evt->findParam("MINOR"));
-    dev_t device = makedev(major, minor);
+    if (devType == "disk") {
+        std::string eventPath(evt->findParam("DEVPATH")?evt->findParam("DEVPATH"):"");
+        std::string devName(evt->findParam("DEVNAME")?evt->findParam("DEVNAME"):"");
 
-    switch (evt->getAction()) {
-    case NetlinkEvent::Action::kAdd: {
-        for (auto source : mDiskSources) {
-            if (source->matches(eventPath)) {
-                // For now, assume that MMC and virtio-blk (the latter is
-                // emulator-specific; see Disk.cpp for details) devices are SD,
-                // and that everything else is USB
-                int flags = source->getFlags();
-                if (major == kMajorBlockMmc
-                    || (android::droidvold::IsRunningInEmulator()
-                    && major >= (int) kMajorBlockExperimentalMin
-                    && major <= (int) kMajorBlockExperimentalMax)) {
-                    flags |= android::droidvold::Disk::Flags::kSd;
-                } else {
-                    flags |= android::droidvold::Disk::Flags::kUsb;
-                }
+        int major = atoi(evt->findParam("MAJOR"));
+        int minor = atoi(evt->findParam("MINOR"));
+        dev_t device = makedev(major, minor);
 
-                auto disk = new android::droidvold::Disk(eventPath, device,
-                        source->getNickname(), flags);
-                disk->create();
-                mDisks.push_back(std::shared_ptr<android::droidvold::Disk>(disk));
-                break;
-            }
-        }
-        break;
-    }
-    case NetlinkEvent::Action::kChange: {
-        LOG(DEBUG) << "Disk at " << major << ":" << minor << " changed";
-        for (auto disk : mDisks) {
-            if (disk->getDevice() == device) {
-                if (disk->isSrdiskMounted()) {
-                    LOG(DEBUG) << "srdisk  ejected";
-                    disk->destroyAllVolumes();
+        switch (evt->getAction()) {
+        case NetlinkEvent::Action::kAdd: {
+            for (auto source : mDiskSources) {
+                if (source->matches(eventPath)) {
+                    // For now, assume that MMC and virtio-blk (the latter is
+                    // emulator-specific; see Disk.cpp for details) devices are SD,
+                    // and that everything else is USB
+                    int flags = source->getFlags();
+                    if (major == kMajorBlockMmc
+                        || (android::droidvold::IsRunningInEmulator()
+                        && major >= (int) kMajorBlockExperimentalMin
+                        && major <= (int) kMajorBlockExperimentalMax)) {
+                        flags |= android::droidvold::Disk::Flags::kSd;
+                    } else {
+                        flags |= android::droidvold::Disk::Flags::kUsb;
+                    }
+
+                    auto disk = new android::droidvold::Disk(eventPath, device,
+                            source->getNickname(), devName, flags);
+                    disk->create();
+                    mDisks.push_back(std::shared_ptr<android::droidvold::Disk>(disk));
                     break;
                 }
+            }
+            break;
+        }
+        case NetlinkEvent::Action::kChange: {
+            LOG(DEBUG) << "Disk at " << major << ":" << minor << " changed";
+            for (auto disk : mDisks) {
+                if (disk->getDevice() == device) {
+                    if (disk->isSrdiskMounted()) {
+                        LOG(DEBUG) << "srdisk  ejected";
+                        disk->destroyAllVolumes();
+                        break;
+                    }
 
-                disk->readMetadata();
-                disk->readPartitions();
+                    //disk->readMetadata();
+                    //disk->readPartitions();
+                }
             }
+            break;
         }
-        break;
-    }
-    case NetlinkEvent::Action::kRemove: {
-        auto i = mDisks.begin();
-        while (i != mDisks.end()) {
-            if ((*i)->getDevice() == device) {
-                (*i)->destroy();
-                i = mDisks.erase(i);
-            } else {
-                ++i;
+        case NetlinkEvent::Action::kRemove: {
+            auto i = mDisks.begin();
+            while (i != mDisks.end()) {
+                if ((*i)->getDevice() == device) {
+                    (*i)->destroy();
+                    i = mDisks.erase(i);
+                } else {
+                    ++i;
+                }
             }
+            break;
         }
-        break;
+        default: {
+            LOG(WARNING) << "Unexpected block event action " << (int) evt->getAction();
+            break;
+        }
+        }
+
+    } else {
+        for (auto disk : mDisks) {
+            disk->handleBlockEvent(evt);
+        }
     }
-    default: {
-        LOG(WARNING) << "Unexpected block event action " << (int) evt->getAction();
-        break;
-    }
-    }
+
 }
 
 void VolumeManager::addDiskSource(const std::shared_ptr<DiskSource>& diskSource) {
@@ -341,8 +352,9 @@ int VolumeManager::reset() {
     // newly connected framework hears all events.
     for (auto disk : mDisks) {
         disk->destroy();
-        disk->create();
+        disk->reset();
     }
+
     return 0;
 }
 
@@ -362,5 +374,49 @@ int VolumeManager::mkdirs(char* path) {
     } else {
         SLOGE("Failed to find mounted volume for %s", path);
         return -EINVAL;
+    }
+}
+
+static void do_coldboot(DIR *d, int lvl) {
+    struct dirent *de;
+    int dfd, fd;
+
+    dfd = dirfd(d);
+
+    fd = openat(dfd, "uevent", O_WRONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        write(fd, "add\n", 4);
+        close(fd);
+    }
+
+    while ((de = readdir(d))) {
+        DIR *d2;
+
+        if (de->d_name[0] == '.')
+            continue;
+
+        if (de->d_type != DT_DIR && lvl > 0)
+            continue;
+
+        fd = openat(dfd, de->d_name, O_RDONLY | O_DIRECTORY);
+        if (fd < 0)
+            continue;
+
+        d2 = fdopendir(fd);
+        if (d2 == 0)
+            close(fd);
+        else {
+            do_coldboot(d2, lvl + 1);
+            closedir(d2);
+        }
+    }
+}
+
+void VolumeManager::coldboot(const char *path) {
+    DIR *d = opendir(path);
+
+    if (d) {
+        do_coldboot(d, 0);
+        closedir(d);
     }
 }

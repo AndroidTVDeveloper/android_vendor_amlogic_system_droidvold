@@ -42,19 +42,10 @@ using android::base::StringPrintf;
 namespace android {
 namespace droidvold {
 
-static const char* kFusePath = "/system/bin/sdcard";
-
 static const char* kChownPath = "/system/bin/chown";
 
-PublicVolume::PublicVolume(dev_t device) :
-        VolumeBase(Type::kPublic), mDevice(device), mFusePid(0), mJustPhysicalDev(false) {
-    setId(StringPrintf("public:%u,%u", major(device), minor(device)));
-    mDevPath = StringPrintf("/dev/block/droidvold/%s", getId().c_str());
-    mSrMounted = false;
-}
-
-PublicVolume::PublicVolume(const std::string& physicalDevName) :
-        VolumeBase(Type::kPublic), mFusePid(0), mJustPhysicalDev(true) {
+PublicVolume::PublicVolume(const std::string& physicalDevName, const bool isPhysical) :
+        VolumeBase(Type::kPublic), mFusePid(0), mJustPhysicalDev(isPhysical) {
     setId(physicalDevName);
     mDevPath = StringPrintf("/dev/block/%s", getId().c_str());
 }
@@ -63,8 +54,13 @@ PublicVolume::~PublicVolume() {
 }
 
 status_t PublicVolume::readMetadata() {
-    status_t res = ReadMetadataUntrusted(mDevPath, mFsType, mFsUuid, mFsLabel);
+    status_t res = ReadPartMetadata(mDevPath, mFsType, mFsUuid, mFsLabel);
+
+    if (VolumeManager::Instance()->getDebug())
+        LOG(DEBUG) << "blkid get devPath=" << mDevPath << " fsType= " << mFsType;
+
     notifyEvent(ResponseCode::VolumeFsTypeChanged, mFsType);
+
     // TODO: find the Uuid of srdisk
     // If mFsUuid of publicVolume is empty,
     // it will cause systemUi crash when it is mounted
@@ -77,17 +73,16 @@ status_t PublicVolume::readMetadata() {
 
     notifyEvent(ResponseCode::VolumeFsUuidChanged, mFsUuid);
     notifyEvent(ResponseCode::VolumeFsLabelChanged, mFsLabel);
-    return res;
+
+    return OK;
 }
 
 status_t PublicVolume::doCreate() {
-    if (mJustPhysicalDev) return 0;
-    return CreateDeviceNode(mDevPath, mDevice);
+    return 0;
 }
 
 status_t PublicVolume::doDestroy() {
-    if (mJustPhysicalDev) return 0;
-    return DestroyDeviceNode(mDevPath);
+    return 0;
 }
 
 status_t PublicVolume::doMount() {
@@ -105,11 +100,6 @@ status_t PublicVolume::doMount() {
         return -EIO;
     }
 
-    if (!mJustPhysicalDev && mFsType == "vfat") {
-        LOG(DEBUG) << getId() << " vfat will handle by vold";
-        return 0;
-    }
-
     // Use UUID as stable name, if available
     std::string stableName = getId();
     if (!mFsUuid.empty()) {
@@ -118,35 +108,19 @@ status_t PublicVolume::doMount() {
     mRawPath = StringPrintf("/mnt/media_rw/%s", stableName.c_str());
 
     VolumeManager *vm = VolumeManager::Instance();
+    //if (!mJustPhysicalDev && mFsType == "vfat") {
+    if (mFsType == "vfat") {
+        sleep(2);
+        if (vm->isMountpointMounted(mRawPath.c_str())) {
+            LOG(DEBUG) << getId() << " vfat will handle by vold";
+            return 0;
+        }
+    }
+
     if (vm->isMountpointMounted(mRawPath.c_str())) {
         LOG(ERROR) << " path:" << mRawPath << " is already mounted";
         return -EIO;
     }
-
-    // Check filesystems
-    status_t checkStatus = -1;
-    if (mFsType == "vfat") {
-        checkStatus = vfat::Check(mDevPath);
-    } else if (mFsType == "ntfs") {
-        checkStatus = ntfs::Check(mDevPath.c_str());
-    } else if (mFsType == "exfat") {
-        checkStatus = exfat::Check(mDevPath.c_str());
-    } else if (!strncmp(mFsType.c_str(), "ext", 3)) {
-        // ext2/3/4 check later
-        checkStatus = 0;
-    } else if (mFsType == "hfs") {
-        checkStatus = hfsplus::Check(mDevPath.c_str());
-    } else if (mFsType == "iso9660" || mFsType == "udf") {
-        // iso needn't check
-        checkStatus = iso9660::Check(mDevPath.c_str());
-    }
-
-
-    if (checkStatus) {
-        LOG(ERROR) << getId() << " failed to check filesystem " << mFsType;
-        return -EIO;
-    }
-
 
     setInternalPath(mRawPath);
     setPath(mRawPath);
@@ -158,34 +132,18 @@ status_t PublicVolume::doMount() {
 
     // Mount device
     status_t mountStatus = -1;
-    std::string logicPartDevPath = mDevPath;
-    if (!mJustPhysicalDev &&
-        (mFsType == "ntfs" || mFsType == "exfat")) {
-        if (GetLogicalPartitionDevice(mDevice, getSysPath(), logicPartDevPath) != OK) {
-            LOG(ERROR) << "failed to get logical partition device for fstype " << mFsType;
-            return -errno;
-        }
-    }
 
     if (mFsType == "vfat") {
         mountStatus = vfat::Mount(mDevPath, mRawPath, false, false, false,
                             AID_MEDIA_RW, AID_MEDIA_RW, 0007, true);
     } else if (mFsType == "ntfs") {
-        mountStatus = ntfs::Mount(logicPartDevPath.c_str(), mRawPath.c_str(), false, false,
+        mountStatus = ntfs::Mount(mDevPath.c_str(), mRawPath.c_str(), false, false,
                             AID_MEDIA_RW, AID_MEDIA_RW, 0007, true);
     } else if (mFsType == "exfat") {
-        mountStatus = exfat::Mount(logicPartDevPath.c_str(), mRawPath.c_str(), false, false,
+        mountStatus = exfat::Mount(mDevPath.c_str(), mRawPath.c_str(), false, false,
                             AID_MEDIA_RW, AID_MEDIA_RW, 0007, true);
     } else if (!strncmp(mFsType.c_str(), "ext", 3)) {
-        int res = ext4::Check(logicPartDevPath, mRawPath);
-        if (res == 0 || res == 1) {
-            LOG(DEBUG) << getId() << " passed filesystem check";
-        } else {
-            PLOG(ERROR) << getId() << " failed filesystem check";
-        //    return -EIO;
-        }
-
-        mountStatus = ext4::Mount(logicPartDevPath, mRawPath, false, false, true, mFsType);
+        mountStatus = ext4::Mount(mDevPath, mRawPath, false, false, true, mFsType);
     } else if (mFsType == "hfs") {
         mountStatus = hfsplus::Mount(mDevPath.c_str(), mRawPath.c_str(), false, false,
                             AID_MEDIA_RW, AID_MEDIA_RW, 0007, true);

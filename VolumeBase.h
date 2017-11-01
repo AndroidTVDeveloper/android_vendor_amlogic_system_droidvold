@@ -84,6 +84,8 @@ public:
     const std::string& getPath() { return mPath; }
     const std::string& getSysPath() { return mSysPath; }
     const std::string& getInternalPath() { return mInternalPath; }
+    int getDiskFlags() { return mDiskFlags; }
+    int getPartNo() { return mPartNo; }
 
     status_t setDiskId(const std::string& diskId);
     status_t setPartGuid(const std::string& partGuid);
@@ -91,6 +93,8 @@ public:
     status_t setMountUserId(userid_t mountUserId);
     status_t setSilent(bool silent);
     void setSysPath(const std::string& sysPath) { mSysPath = sysPath; }
+    status_t setDiskFlags(int diskFlags);
+    status_t setPartNo(int part);
 
     void addVolume(const std::shared_ptr<VolumeBase>& volume);
     void removeVolume(const std::shared_ptr<VolumeBase>& volume);
@@ -144,6 +148,8 @@ private:
     std::string mInternalPath;
     /* Flag indicating that volume should emit no events */
     bool mSilent;
+    int mDiskFlags;
+    int mPartNo;
 
     /* Volumes stacked on top of this volume */
     std::list<std::shared_ptr<VolumeBase>> mVolumes;
