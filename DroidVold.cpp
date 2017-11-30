@@ -80,6 +80,18 @@ Return<Result> DroidVold::mount(const hidl_string& id, uint32_t flag, uint32_t u
 
     VolumeManager *vm = VolumeManager::Instance();
     std::string vid = id;
+
+#ifdef HAS_VIRTUAL_CDROM
+    // is loop volume
+    if (flag == 0xF) {
+        if (vm->mountloop(vid.c_str())) {
+            LOG(ERROR) << " mount loop error!";
+            return Result::FAIL;
+        }
+        return Result::OK;
+    }
+#endif
+
     auto vol = vm->findVolume(vid);
     if (vol == nullptr) {
         LOG(ERROR) << "mount ,count not find volume id=" <<  vid;
@@ -102,6 +114,17 @@ Return<Result> DroidVold::unmount(const hidl_string& id) {
     // unmount [volId]
     VolumeManager *vm = VolumeManager::Instance();
     std::string vid = id;
+
+#ifdef HAS_VIRTUAL_CDROM
+    if (vid.find("/mnt/loop") != std::string::npos) {
+        if (vm->unmountloop(true)) {
+            LOG(ERROR) << "unmount loop error!";
+            return Result::FAIL;
+        }
+        return Result::OK;
+    }
+#endif
+
     auto vol = vm->findVolume(vid);
     if (vol == nullptr) {
         LOG(ERROR) << "unmount, count not find volume id=" <<  vid;

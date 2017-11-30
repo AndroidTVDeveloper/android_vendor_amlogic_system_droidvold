@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include <linux/kdev_t.h>
+#include <linux/loop.h>
 
 #define LOG_TAG "droidVold"
 
@@ -41,6 +42,7 @@
 #include <selinux/android.h>
 
 #include <sysutils/NetlinkEvent.h>
+#include <private/android_filesystem_config.h>
 
 #include "VolumeManager.h"
 #include "NetlinkManager.h"
