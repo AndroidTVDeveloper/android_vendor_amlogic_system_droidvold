@@ -487,7 +487,14 @@ dev_t GetDevice(const std::string& path) {
 std::string DefaultFstabPath() {
     char hardware[PROPERTY_VALUE_MAX];
     property_get("ro.hardware", hardware, "");
-    return StringPrintf("/fstab.%s", hardware);
+
+    for (const char* prefix : {"/odm/etc/fstab", "/vendor/etc/fstab", "/fstab"}) {
+        std::string fstab_path = StringPrintf("%s.%s", prefix, hardware);
+        if (access(fstab_path.c_str(), F_OK) == 0) {
+            return fstab_path;
+        }
+    }
+    return std::string();
 }
 
 status_t RestoreconRecursive(const std::string& path) {
