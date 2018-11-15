@@ -1,9 +1,12 @@
 /*
- * gen_uuid_nt.c -- Use NT api to generate uuid
+ * Copyright (c) 2014 Amlogic, Inc. All rights reserved.
  *
- * Written by Andrey Shedel (andreys@ns.cr.cyco.com)
+ * This source code is subject to the terms and conditions defined in the
+ * file 'LICENSE' which is part of this source code package.
+ *
+ * Description:
+ *     AMLOGIC get_uuid_nt
  */
-
 
 #include "config.h"
 #include "uuidP.h"

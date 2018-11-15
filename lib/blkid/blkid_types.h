@@ -1,8 +1,13 @@
 /*
- * If linux/types.h is already been included, assume it has defined
- * everything we need.  (cross fingers)  Other header files may have
- * also defined the types that we need.
+ * Copyright (c) 2014 Amlogic, Inc. All rights reserved.
+ *
+ * This source code is subject to the terms and conditions defined in the
+ * file 'LICENSE' which is part of this source code package.
+ *
+ * Description:
+ *     AMLOGIC blkid_types
  */
+
 #if (!defined(_LINUX_TYPES_H) && !defined(_BLKID_TYPES_H) && \
 	!defined(_EXT2_TYPES_H))
 #define _EXT2_TYPES_H
