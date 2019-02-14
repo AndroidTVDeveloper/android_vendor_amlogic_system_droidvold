@@ -20,22 +20,19 @@ cc_binary {
         "ResponseCode.cpp",
         "logwrap.c",
         "Utils.cpp",
-	    "main.cpp",
+        "main.cpp",
     ],
-    include_dirs: [ 
+    include_dirs: [
         "system/libhidl/transport/include/hidl",
-	    "external/libcxx/include",
+        "external/libcxx/include",
         "system/core/include",
         "system/core/fs_mgr/include",
         "system/core/logwrapper/include",
         "system/core/fs_mgr/include_fstab",
         "external/e2fsprogs/lib",
     ],
-    init_rc: [
-        "droidvold.rc",
-    ],
-    shared_libs: [ 
-        "vendor.amlogic.hardware.droidvold@1.0", 
+    shared_libs: [
+        "vendor.amlogic.hardware.droidvold@1.0",
         "libhidlbase",
         "libhidltransport",
         "libsysutils",
